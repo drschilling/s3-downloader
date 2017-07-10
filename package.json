@@ -8,10 +8,11 @@
   },
   "keywords": [],
   "author": "Rafael Raposo <orapouso@gmail.com>",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "commander": "^2.9.0",
     "rx": "^4.1.0",
-    "s3": "^4.4.0"
+    "s3": "^4.4.0",
+    "single-line-log": "^1.1.2"
   }
 }

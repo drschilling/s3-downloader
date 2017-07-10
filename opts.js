@@ -9,6 +9,7 @@ opts
   .option('-s, --secret-access-key <secret-key>', 'AWS Secret Key')
   .option('-b, --bucket <bucket>', 'Bucket to download')
   .option('-k, --key <key>', 'Bucket key to download')
+  .option('-m, --max-concurrent <max>', 'Number of max concurrent downloads. Defaults to 5')
   .option('-o, --output <output>', 'Output path')
   .parse(process.argv)
 
@@ -19,7 +20,6 @@ if (opts.credentials) {
   try {
     let file = fs.readFileSync(opts.credentials, {encoding:'utf-8'})
     let credentials = file.split('\n')[1].split(',')
-    console.log(credentials)
 
     opts.accessKeyId = credentials[ACCESS_KEY_ID_IDX]
     opts.secretAccessKey = credentials[SECRET_ACCESS_KEY_IDX]
@@ -47,6 +47,12 @@ if (!opts.key) {
 if (!opts.output) {
   console.error('No output path provided')
   process.exit(1)
+}
+
+if (!opts.maxConcurrent) {
+  opts.maxConcurrent = 5
+} else {
+  opts.maxConcurrent = parseInt(opts.maxConcurrent, 10)
 }
 
 module.exports = opts

@@ -1,7 +1,10 @@
+const fs = require('fs')
+const log = require('single-line-log').stdout
 const s3 = require('s3')
-const Rx = require('rx')
 
 let opts = require('./opts')
+
+let downloadQueue = []
 
 let s3opts = {
   accessKeyId: opts.accessKeyId,
@@ -16,47 +19,92 @@ let listParams = {
   'Delimiter': '/'
 }
 let lister = client.listObjects({s3Params: listParams})
+lister.addListener('data', listerHandler)
+lister.addListener('end', listEnded)
 
-Rx.Observable.fromEventPattern((handler) => {
-  lister.addListener('data', handler)
-}, (handler) => {
-  lister.removeListener('data', handler)
-})
-.concatMap((data) => data.Contents)
-.pluck('Key')
-.take(4)
-.bufferWithCount(2)
-.flatMap(x => x)
-.flatMap((key) => {
-  console.log('key', key)
+function listerHandler(data) {
+  downloadQueue = downloadQueue.concat(data.Contents.map((content) => ({key: content.Key, size: content.Size, progress: 0})))
+}
+
+function listEnded() {
+  total = downloadQueue.length
+  console.log(`Found ${total} files in ${opts.key}. Starting ${opts.maxConcurrent} downloads`)
+  printProgress()
+  for (let i = 0; i < opts.maxConcurrent; i++) {
+    nextDownload()
+  }
+}
+
+
+let downloading = []
+let total = -1
+function nextDownload() {
+  if (downloading.length > opts.maxConcurrent) { return }
+  if (downloadQueue.length === 0) { return }
+
+  let item = downloadQueue.shift()
+
+  let outFile = opts.output + item.key.substring(item.key.lastIndexOf('/'))
+  fs.stat(outFile, (err, stat) => {
+    if (err) {
+      if (err.code === 'ENOENT') {
+        download(item, outFile)
+      }
+    } else {
+      if (stat.size !== item.size) {
+        fs.unlink(outFile, () => {
+          download(item, outFile)
+        })
+      } else {
+        nextDownload()
+      }
+    }
+  })
+}
+
+function download(item, outFile) {
+  downloading.push(item)
   let params = {
-    localFile: opts.output + key.substring(key.lastIndexOf('/')),
+    localFile: outFile,
     s3Params: {
       'Bucket': 'tvg-bd-globocom',
-      'Key': key
+      'Key': item.key
     }
   }
-  
-  function progress() {
-    // console.log('progress', key, downloader.progressAmount, downloader.progressTotal)
+
+  let downloader = client.downloadFile(params)
+  downloader.addListener('progress', downloadProgress.bind(null, downloader, item))
+  downloader.addListener('error', downloadError.bind(null, item))
+  downloader.addListener('end', downloadDone.bind(null, item))
+}
+
+function downloadProgress(downloader, item) {
+  item.progress = (downloader.progressAmount / downloader.progressTotal * 100)
+}
+
+function downloadDone(item) {
+  downloading.splice(downloading.indexOf(item), 1)
+  nextDownload()
+}
+
+function downloadError(item, err) {
+  console.log('download error', item.key.substr(-10), err)
+  downloading = downloading.without(item)
+  downloadQueue.push(item)
+  nextDownload()
+}
+
+function printProgress() {
+  let actual = total-downloadQueue.length
+  let msg = 'Downloading '+ (actual) + ' of ' + total + ': ' + (actual/total*100).toFixed(1) + '% - concurrency ' + downloading.length
+  if (downloading.length) {
+    msg += '\nProgress:'
   }
 
-  console.log('downloading file', params)
-  let downloader = client.downloadFile(params)
-  return Rx.Observable.fromEventPattern((handler) => {
-    downloader.addListener('progress', progress)
-    downloader.addListener('end', handler)
-  }, (handler) => {
-    downloader.removeListener('progress', progress)
-    downloader.removeListener('end', handler)
-  }, () => {
-    return key
+  downloading.forEach((item) => {
+    msg += `\n${item.key.substr(-10)}: ${item.progress.toFixed(1)}%`
   })
-})
-.subscribe((key) => {
-  console.log('download done', key)
-}, (err) => {
-  console.log('ERROR', err)
-}, () => {
-  console.log('COMPLETED')
-})
+
+  log(msg)
+  setImmediate(printProgress)
+}
